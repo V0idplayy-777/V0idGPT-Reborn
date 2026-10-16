@@ -1,0 +1,19 @@
+{
+  "name": "v0idgpt",
+  "version": "1.1.0",
+  "description": "v0idgpt: NeuronForge standalone model (language)",
+  "type": "module",
+  "main": "model.mjs",
+  "types": "model.d.mts",
+  "exports": {
+    ".": {
+      "types": "./model.d.mts",
+      "default": "./model.mjs"
+    }
+  },
+  "scripts": {
+    "verify": "node verify.mjs",
+    "example": "node example.mjs"
+  },
+  "license": "UNLICENSED"
+}
