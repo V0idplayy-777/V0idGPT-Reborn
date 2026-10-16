@@ -1,4 +1,4 @@
-name: Provision Convex and build frontend
+name: Provision Convex and publish GitHub Pages
 
 on:
   push:
@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: read
+  pages: write
+  id-token: write
 
 # Serialize backend releases so an older deployment cannot race a newer one.
 concurrency:
@@ -17,6 +19,9 @@ jobs:
   release:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -28,9 +33,16 @@ jobs:
         run: npm run build:release
         env:
           CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+          VITE_BASE: /V0idGPT-Reborn/
       # Do not publish a frontend artifact if backend provisioning failed.
       - uses: actions/upload-artifact@v4
         with:
           name: frontend-dist
           path: dist/
           if-no-files-found: error
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+      - id: deployment
+        uses: actions/deploy-pages@v4
