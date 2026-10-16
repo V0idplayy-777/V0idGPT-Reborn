@@ -60,6 +60,7 @@ type NewKey = { token: string; prefix: string; name: string };
 
 const MODEL_ID = "v0idgpt";
 const FREE_LIMIT = 5_000;
+const GITHUB_OAUTH_PENDING_KEY = "v0id-github-oauth-pending";
 const PREMIUM_LIMIT = 500_000;
 
 function numberFormat(value: number) {
@@ -435,12 +436,68 @@ export default function App() {
     window.setTimeout(() => setToast((current) => current === message ? null : current), 4200);
   };
 
+  // Convex Auth completes OAuth after the browser returns to this app. Keep a
+  // tab-scoped marker so a failed code exchange cannot look like an ordinary
+  // signed-out visit. Convex Auth currently leaves code-exchange rejections
+  // unhandled, so listen for those too and show a useful failure state.
+  useEffect(() => {
+    const clearPendingAttempt = () => {
+      try {
+        window.sessionStorage.removeItem(GITHUB_OAUTH_PENDING_KEY);
+      } catch {
+        // Storage may be unavailable; auth itself should still work.
+      }
+    };
+    const onUnhandledRejection = (event: PromiseRejectionEvent) => {
+      let isPending = false;
+      try {
+        isPending = window.sessionStorage.getItem(GITHUB_OAUTH_PENDING_KEY) === "1";
+      } catch {
+        return;
+      }
+      if (!isPending) return;
+      clearPendingAttempt();
+      setSigningIn(false);
+      const detail = event.reason instanceof Error ? ` (${event.reason.message})` : "";
+      notify({
+        text: `GitHub returned to V0id, but session verification failed${detail}. Check the Convex deployment logs.`,
+        kind: "error",
+      });
+    };
+    window.addEventListener("unhandledrejection", onUnhandledRejection);
+    return () => window.removeEventListener("unhandledrejection", onUnhandledRejection);
+  }, []);
+
+  useEffect(() => {
+    if (authLoading) return;
+    let isPending = false;
+    try {
+      isPending = window.sessionStorage.getItem(GITHUB_OAUTH_PENDING_KEY) === "1";
+      if (isPending) window.sessionStorage.removeItem(GITHUB_OAUTH_PENDING_KEY);
+    } catch {
+      return;
+    }
+    if (isPending && !isAuthenticated) {
+      setSigningIn(false);
+      notify({
+        text: "GitHub returned to V0id, but Convex did not establish a session. Check the Convex deployment logs for the OAuth callback and code verification.",
+        kind: "error",
+      });
+    }
+  }, [authLoading, isAuthenticated]);
+
   const handleSignIn = async () => {
     setSigningIn(true);
     try {
+      window.sessionStorage.setItem(GITHUB_OAUTH_PENDING_KEY, "1");
       await signIn("github", { redirectTo: "/" });
     } catch {
-      notify({ text: "GitHub sign-in isn't configured yet. Add the GitHub OAuth keys to your Convex deployment.", kind: "error" });
+      try {
+        window.sessionStorage.removeItem(GITHUB_OAUTH_PENDING_KEY);
+      } catch {
+        // Ignore unavailable session storage.
+      }
+      notify({ text: "GitHub sign-in could not be started. Check the Convex deployment logs and OAuth configuration.", kind: "error" });
       setSigningIn(false);
     }
   };
