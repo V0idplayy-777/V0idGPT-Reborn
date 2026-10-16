@@ -38,7 +38,7 @@ Each run:
 
 1. Installs dependencies and runs `npm run build:release`.
 2. Uses Convex's deployment command to build with the selected deployment's public URL, then deploy the schema, indexes, and functions. This provisions missing tables, including Convex Auth tables, without dummy records or wiping existing data. Incompatible schema changes fail rather than automatically deleting data.
-3. Uploads `frontend-dist` only after both the build and backend deployment succeed. Publish that artifact with your frontend host; this workflow does not itself configure hosting.
+3. Uploads `frontend-dist` only after both the build and backend deployment succeed, then publishes that build to **GitHub Pages** (`https://<owner>.github.io/V0idGPT-Reborn/`). In the repository settings, set Pages source to **GitHub Actions**. Use a **production** `CONVEX_DEPLOY_KEY`; a development key (`…:dev/…`) will still push, but it is not the production backend.
 
 Use a production deployment key for production releases. The frontend's `VITE_CONVEX_URL` is supplied by Convex, so the build targets the deployment selected by the key rather than the hardcoded fallback URL. The deploy key is removed from the frontend build process's environment.
 
