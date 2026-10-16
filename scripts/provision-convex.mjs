@@ -10,7 +10,7 @@ const repoRoot = path.resolve(path.dirname(scriptPath), "..");
  * server-side deploy key. Safe for app startup: the key is never passed to the
  * browser, printed, or copied into a file.
  */
-export function provisionConvex({ required = false } = {}) {
+export function provisionConvex({ required = false, development = false, build = false } = {}) {
   const deployKey = process.env.CONVEX_DEPLOY_KEY?.trim();
   if (!deployKey) {
     const message =
@@ -21,10 +21,17 @@ export function provisionConvex({ required = false } = {}) {
   }
 
   const cliPath = path.join(repoRoot, "node_modules", "convex", "bin", "main.js");
-  console.log("Provisioning Convex schema and functions for the configured development deployment…");
+  console.log("Provisioning Convex schema and functions for the deployment selected by CONVEX_DEPLOY_KEY…");
+  const args = development
+    ? ["dev", "--once", "--typecheck", "enable", "--codegen", "enable"]
+    : ["deploy", "--yes", "--typecheck", "enable", "--codegen", "enable"];
+  if (build) {
+    if (development) throw new Error("Release builds cannot use development provisioning.");
+    args.push("--cmd", "node scripts/build-frontend.mjs", "--cmd-url-env-var-name", "VITE_CONVEX_URL");
+  }
   const result = spawnSync(
     process.execPath,
-    [cliPath, "dev", "--once", "--typecheck", "enable", "--codegen", "enable"],
+    [cliPath, ...args],
     {
       cwd: repoRoot,
       env: process.env,
@@ -42,7 +49,7 @@ export function provisionConvex({ required = false } = {}) {
 
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === pathToFileURL(scriptPath).href) {
   try {
-    provisionConvex({ required: process.argv.includes("--required") });
+    provisionConvex({ required: process.argv.includes("--required"), build: process.argv.includes("--build") });
   } catch (error) {
     console.error(error instanceof Error ? error.message : "Convex provisioning failed.");
     process.exitCode = 1;
