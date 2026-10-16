@@ -9,7 +9,8 @@
     "preview": "vite preview --host 0.0.0.0",
     "convex:dev": "convex dev",
     "convex:deploy": "node scripts/provision-convex.mjs --required",
-    "model:verify": "node v0idgpt/javascript/verify.mjs"
+    "model:verify": "node v0idgpt/javascript/verify.mjs",
+    "build:release": "node scripts/provision-convex.mjs --required --build"
   },
   "dependencies": {
     "@auth/core": "^0.41.1",

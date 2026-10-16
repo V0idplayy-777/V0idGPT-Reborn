@@ -7,7 +7,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 
 try {
   if (process.env.V0ID_SKIP_CONVEX_AUTOPROVISION !== "1") {
-    provisionConvex({ required: false });
+    provisionConvex({ required: false, development: true });
   } else {
     console.log("Convex auto-provision skipped by V0ID_SKIP_CONVEX_AUTOPROVISION=1.");
   }

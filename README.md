@@ -30,13 +30,29 @@ The frontend defaults to the Convex deployment URL configured for this project. 
 
 The Convex schema and functions are code, so they must be deployed before a browser dashboard can call them. The web client cannot safely create its own backend tables: that would require exposing an administrator deploy key to every browser user. Instead, `npm run dev` now checks for a **server-side** `CONVEX_DEPLOY_KEY` and, when present, runs an idempotent Convex deployment before starting Vite. The key is removed from Vite's environment and is never bundled or written to disk. If no key is set, development starts normally with a clear message that provisioning was skipped.
 
-To provision explicitly, set the deployment key as a **temporary environment variable** in your own terminal (do not put it in `.env.local`, a commit, or a frontend variable), then run:
+### Automatic GitHub releases
+
+The workflow in `.github/workflows/release.yml` runs on pushes to `main` or manually from GitHub Actions. It reads your existing repository Actions secret **`CONVEX_DEPLOY_KEY`**; no secret belongs in frontend code or a `VITE_` variable.
+
+Each run:
+
+1. Installs dependencies and runs `npm run build:release`.
+2. Uses Convex's deployment command to build with the selected deployment's public URL, then deploy the schema, indexes, and functions. This provisions missing tables, including Convex Auth tables, without dummy records or wiping existing data. Incompatible schema changes fail rather than automatically deleting data.
+3. Uploads `frontend-dist` only after both the build and backend deployment succeed. Publish that artifact with your frontend host; this workflow does not itself configure hosting.
+
+Use a production deployment key for production releases. The frontend's `VITE_CONVEX_URL` is supplied by Convex, so the build targets the deployment selected by the key rather than the hardcoded fallback URL. The deploy key is removed from the frontend build process's environment.
+
+GitHub secrets are available to Actions, not to visitors' browsers or ordinary local terminals. Tables are automatically provisioned at release time, not on page load. If backend resources are subsequently removed, rerun the workflow to restore the schema/functions. OAuth and billing environment variables still need the setup below.
+
+For an explicit deployment from a trusted terminal with `CONVEX_DEPLOY_KEY` already exported:
 
 ```bash
-CONVEX_DEPLOY_KEY='<your Convex development deploy key>' npm run convex:deploy
+npm run convex:deploy
+# Or deploy and build a frontend targeting the same deployment:
+npm run build:release
 ```
 
-Or run `npm run dev` with that same temporary server environment to deploy once and start the dashboard. For a static/hosted frontend release, run `npm run convex:deploy` in a secure release step before publishing the web app. The CLI generates typed files under `convex/_generated/` and deploys the schema/functions. If the hosted Convex domain is unreachable from your environment, this step must be run from a network that can reach Convex; the project code is ready for that deployment.
+Local `npm run dev` retains development provisioning using `convex dev --once` when a key is present. Release commands use `convex deploy` instead. Do not put the key in `.env.local` or commit it. Deployments must run on a network that can reach Convex.
 
 ## Authentication setup
 
