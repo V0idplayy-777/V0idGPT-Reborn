@@ -307,8 +307,7 @@ function PlanCard({
           : "A simple upgrade for bigger workloads. Same model today; new models will be added later."}
       </p>
       <div className="plan-panel__quota"><Zap size={15} /><strong>{premium ? "500,000" : "5,000"}</strong> requests / day</div>
-      <p>🎁 You have been gifted a free trial! You will be warned once your trial is coming to an end!</p>
-      <p>Trial will last for a few months.</p>
+      <div className="plan-panel__quota"><gift size={15} /><strong>You have been gifted a 3-month free trial!</strong></div>
       {premium ? (
         <button className="button button--secondary plan-button" type="button" onClick={onManage} disabled={busy}>
           {busy ? <LoaderCircle className="spin" size={16} /> : <CreditCard size={16} />}
