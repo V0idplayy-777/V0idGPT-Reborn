@@ -4,6 +4,7 @@ import { auth } from "./auth.js";
 const internal: any = anyApi;
 import { httpAction } from "./_generated/server.js";
 import { sha256Hex } from "./lib/crypto.js";
+import { INACTIVITY_DEACTIVATION_DAYS, deactivatedKeyMessage, reactivationSteps } from "./lib/keys.js";
 import { ACTIVE_MODEL_ID } from "./lib/limits.js";
 
 const http = httpRouter();
@@ -17,13 +18,53 @@ class ApiError extends Error {
   status: number;
   code: string;
   extraHeaders: Record<string, string>;
+  details: Record<string, unknown>;
 
-  constructor(status: number, code: string, message: string, extraHeaders: Record<string, string> = {}) {
+  constructor(
+    status: number,
+    code: string,
+    message: string,
+    extraHeaders: Record<string, string> = {},
+    details: Record<string, unknown> = {},
+  ) {
     super(message);
     this.status = status;
     this.code = code;
     this.extraHeaders = extraHeaders;
+    this.details = details;
   }
+}
+
+/** Public dashboard URL, when the deployment knows where it is hosted. */
+function dashboardKeysUrl() {
+  const siteUrl = process.env.SITE_URL?.replace(/\/$/, "");
+  return siteUrl ? `${siteUrl}/#api-keys` : null;
+}
+
+/**
+ * The error returned to any site calling with a key that inactivity switched
+ * off. It names the cause and the exact steps to turn the key back on.
+ */
+function deactivatedKeyError(info: {
+  deactivatedAt?: number | null;
+  lastUsedAt?: number | null;
+  inactivityDays?: number;
+  prefix?: string;
+}) {
+  const days = info.inactivityDays ?? INACTIVITY_DEACTIVATION_DAYS;
+  const url = dashboardKeysUrl();
+  const message = deactivatedKeyMessage({ days, dashboardUrl: url, prefix: info.prefix });
+  return new ApiError(403, "api_key_deactivated", message, {}, {
+    reason: "inactivity",
+    inactivity_days: days,
+    deactivated_at: info.deactivatedAt ? new Date(info.deactivatedAt).toISOString() : null,
+    last_used_at: info.lastUsedAt ? new Date(info.lastUsedAt).toISOString() : null,
+    key_prefix: info.prefix ?? null,
+    reactivation: {
+      dashboard_url: url,
+      steps: reactivationSteps(url),
+    },
+  });
 }
 
 function json(data: unknown, status = 200, extraHeaders: Record<string, string> = {}) {
@@ -54,7 +95,7 @@ function apiAction(handler: (ctx: any, request: Request) => Promise<Response>) {
       return cors(await handler(ctx, request));
     } catch (error) {
       if (error instanceof ApiError) {
-        return cors(json({ error: { message: error.message, type: "v0id_error", code: error.code } }, error.status, error.extraHeaders));
+        return cors(json({ error: { message: error.message, type: "v0id_error", code: error.code, ...error.details } }, error.status, error.extraHeaders));
       }
       return cors(json({ error: { message: "The model could not process this request.", type: "server_error", code: "inference_failed" } }, 500));
     }
@@ -108,6 +149,7 @@ async function validateModelAccess(ctx: any, request: Request) {
   const keyHash = await sha256Hex(presentedKey(request));
   const access = await ctx.runQuery(internal.api.checkApiKey, { keyHash });
   if (!access) throw new ApiError(401, "invalid_api_key", "This API key is invalid or has been revoked.");
+  if (access.status === "deactivated") throw deactivatedKeyError(access);
   return access as { tier: "free" | "premium"; limit: number; used: number };
 }
 
@@ -199,6 +241,7 @@ async function runInference(ctx: any, request: Request, prompt: string, body: Re
 
   if (!quota.ok) {
     if (quota.reason === "unauthorized") throw new ApiError(401, "invalid_api_key", "This API key is invalid or has been revoked.");
+    if (quota.reason === "key_deactivated") throw deactivatedKeyError(quota);
     if (quota.reason === "model_not_found") throw new ApiError(404, "model_not_found", "The requested model is not available.");
     const headers: Record<string, string> = quotaHeaders(quota.limit, quota.used);
     headers["retry-after"] = String(Math.max(1, dayReset() - Math.floor(Date.now() / 1000)));

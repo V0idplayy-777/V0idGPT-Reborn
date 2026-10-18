@@ -11,6 +11,7 @@ A single-page control room for the v0id inference API. It uses **Convex for the 
 - Atomic per-account quotas in Convex: 5,000 accepted inference requests per UTC day on Free and 500,000 on Premium. All API keys on the same account share the allowance. Rejected requests at the limit return HTTP 429 and do not increment usage.
 - Optional Stripe Checkout, customer portal, and a signature-verified webhook for the $5/month Premium entitlement. Premium currently raises the request allowance only; no premium-only model is listed.
 - Live seven-day usage chart and immediate key revocation through Convex subscriptions.
+- Automatic deactivation of API keys after 14 days without a request, reversible from the dashboard with one click.
 
 The model is a small experimental checkpoint with a 64-token context and 320-token vocabulary. It is not a substitute for a production reasoning model. The dashboard and API make those limits visible rather than routing elsewhere.
 
@@ -82,6 +83,45 @@ Configure the Stripe webhook endpoint as `https://tough-pelican-388.convex.site/
 
 The webhook verifies Stripe's timestamped HMAC signature and processes each event idempotently. Premium status is only granted by a verified Stripe event; the browser cannot promote its own account. If Stripe is not configured, the Free console and inference API continue to work.
 
+## API key lifecycle
+
+Keys have three states. Only the owner of a key can change them, from the dashboard's **API keys** panel.
+
+| State | How it happens | Effect on requests | How to leave it |
+| --- | --- | --- | --- |
+| Active | Key created, used, or reactivated | Normal | — |
+| Deactivated | 14 days with no request using that key | `403` with `error.code` of `api_key_deactivated` | Press **Activate** on the key in the dashboard |
+| Revoked | Owner revokes the key | `401` with `error.code` of `invalid_api_key` | Permanent; create a new key |
+
+- The 14-day countdown restarts on every accepted request. A key that is never used starts counting from its creation.
+- Enforcement happens on the request path, so a key is never accepted past its deadline. An hourly Convex cron (`convex/crons.ts`) sweeps keys that simply stop being called, so the dashboard reflects reality even with no traffic.
+- Deactivation is not revocation: the secret is unchanged, usage history is kept, and reactivating it makes the same key work again with no code changes.
+- Deactivated keys still count toward the 10-key account limit, because they can be switched back on at any time. Revoke a key to free the slot.
+- The window lives in one place: `INACTIVITY_DEACTIVATION_DAYS` in `convex/lib/keys.ts`.
+
+A call with a deactivated key returns:
+
+```json
+{
+  "error": {
+    "message": "This API key (v0id_abc1234…) is deactivated because it went 14 days without being used. To switch it back on, the owner of the key signs in to the v0id dashboard …, opens the API keys panel, finds this key, and presses the \"Activate\" button shown on it. …",
+    "type": "v0id_error",
+    "code": "api_key_deactivated",
+    "reason": "inactivity",
+    "inactivity_days": 14,
+    "deactivated_at": "2026-10-04T09:12:00.000Z",
+    "last_used_at": "2026-09-20T09:12:00.000Z",
+    "key_prefix": "v0id_abc1234…",
+    "reactivation": {
+      "dashboard_url": "https://your-dashboard.example/#api-keys",
+      "steps": ["Sign in to the v0id dashboard …", "Go to the API keys panel.", "Find this key in the list and press the \"Activate\" button on it."]
+    }
+  }
+}
+```
+
+`reactivation.dashboard_url` is filled in when the Convex deployment has `SITE_URL` set; otherwise it is `null` and the message points at the dashboard generically.
+
 ## API
 
 Base URL: `https://tough-pelican-388.convex.site`
@@ -121,11 +161,12 @@ Returns a text-completion-style `choices[0].text`. Both inference routes return 
 
 ### `GET /v1/models`
 
-Requires a valid bearer key and lists exactly one model: `v0idgpt`. It does not consume an inference request.
+Requires a valid bearer key and lists exactly one model: `v0idgpt`. It does not consume an inference request. A deactivated key is rejected here too, with the same `api_key_deactivated` error.
 
 ## Checks
 
 ```bash
 npm run build
 npm run model:verify
+npm run keys:verify   # API key inactivity, deactivation, and reactivation rules
 ```

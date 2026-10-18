@@ -21,6 +21,8 @@ import {
   LogOut,
   Menu,
   Plus,
+  Power,
+  PowerOff,
   ShieldCheck,
   Sparkles,
   Terminal,
@@ -31,6 +33,7 @@ import {
 import { useAction, useMutation, useQuery } from "convex/react";
 import { useAuthActions, useConvexAuth } from "@convex-dev/auth/react";
 import { api } from "../convex/_generated/api";
+import { INACTIVITY_DEACTIVATION_DAYS } from "../convex/lib/keys";
 import { convexSiteUrl } from "./lib/convex";
 
 type Tier = "free" | "premium";
@@ -44,8 +47,12 @@ type DashboardData = {
   remaining: number;
   chart: { date: string; requests: number }[];
   activeKeys: number;
+  deactivatedKeys: number;
+  keyLimit: number;
+  inactivityDays: number;
   billingCustomerReady: boolean;
 };
+type KeyStatus = "active" | "deactivated" | "revoked";
 type ApiKey = {
   id: string;
   name: string;
@@ -53,6 +60,12 @@ type ApiKey = {
   createdAt: number;
   lastUsedAt: number | null;
   revokedAt: number | null;
+  status: KeyStatus;
+  deactivatedAt: number | null;
+  deactivatedReason: string | null;
+  lastActivityAt: number;
+  deactivatesAt: number;
+  inactivityDays: number;
 };
 type ToastMessage = { text: string; kind?: "success" | "error" | "info" };
 type TabId = "javascript" | "python" | "curl";
@@ -79,6 +92,27 @@ function relativeTime(timestamp: number | null | undefined) {
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `Used ${hours}h ago`;
   return `Used ${Math.floor(hours / 24)}d ago`;
+}
+
+function timeAgo(timestamp: number | null | undefined) {
+  if (!timestamp) return "a while ago";
+  const minutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60_000));
+  if (minutes < 60) return `${Math.max(1, minutes)}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+/** Countdown copy for a live key that is drifting toward auto-deactivation. */
+function deactivationCountdown(key: ApiKey) {
+  const remaining = key.deactivatesAt - Date.now();
+  if (remaining <= 0) return null;
+  const days = Math.floor(remaining / 86_400_000);
+  const hours = Math.floor(remaining / 3_600_000);
+  if (days >= 3) return null;
+  if (days >= 1) return `Deactivates in ${days}d`;
+  if (hours >= 1) return `Deactivates in ${hours}h`;
+  return "Deactivates within the hour";
 }
 
 async function copyText(text: string) {
@@ -306,18 +340,32 @@ function DocsModal({ onClose }: { onClose: () => void }) {
             <pre className="docs-inline-code">Authorization: Bearer YOUR_V0ID_API_KEY</pre>
           </div>
           <div className="docs-section">
-            <h3><span>02</span> Generate a chat completion</h3>
+            <h3><span>02</span> Inactive keys switch off</h3>
+            <p>
+              A key that goes <strong>{INACTIVITY_DEACTIVATION_DAYS} days without a single request</strong> is deactivated automatically. Calls made with
+              it then fail with <code>403</code> and <code>error.code</code> of <code>api_key_deactivated</code>; the message explains how to turn it
+              back on. The key itself is not deleted or rotated.
+            </p>
+            <p>
+              To reactivate: the owner of the key opens this dashboard, goes to <strong>API keys</strong>, finds the key, and presses
+              <strong> Activate</strong>. The same secret starts working again immediately and the {INACTIVITY_DEACTIVATION_DAYS}-day timer restarts.
+              Revoked keys are permanent and cannot be reactivated.
+            </p>
+            <pre className="docs-inline-code">{`{\n  "error": {\n    "message": "This API key is deactivated because it went ${INACTIVITY_DEACTIVATION_DAYS} days without being used…",\n    "type": "v0id_error",\n    "code": "api_key_deactivated",\n    "reason": "inactivity"\n  }\n}`}</pre>
+          </div>
+          <div className="docs-section">
+            <h3><span>03</span> Generate a chat completion</h3>
             <p>Use the OpenAI-style endpoint below. Only <code>v0idgpt</code> is available right now. Responses are JSON; streaming is not supported.</p>
             <pre className="docs-inline-code">POST {convexSiteUrl}/v1/chat/completions</pre>
             <pre className="docs-inline-code">{`{\n  "model": "v0idgpt",\n  "messages": [{ "role": "user", "content": "Say hello." }],\n  "max_tokens": 40,\n  "temperature": 0.7\n}`}</pre>
           </div>
           <div className="docs-section docs-section--grid">
-            <div><h3><span>03</span> Limits</h3><p>Free: 5,000 accepted inference requests per UTC day. Premium: 500,000. All keys on an account share one allowance. At the limit, requests return <code>429</code> until 00:00 UTC.</p></div>
-            <div><h3><span>04</span> Model boundaries</h3><p>The checkpoint has a 64-token context and 320-token vocabulary. Prompts are truncated to the most recent context. Treat it as an experimental model.</p></div>
+            <div><h3><span>04</span> Limits</h3><p>Free: 5,000 accepted inference requests per UTC day. Premium: 500,000. All keys on an account share one allowance. At the limit, requests return <code>429</code> until 00:00 UTC.</p></div>
+            <div><h3><span>05</span> Model boundaries</h3><p>The checkpoint has a 64-token context and 320-token vocabulary. Prompts are truncated to the most recent context. Treat it as an experimental model.</p></div>
           </div>
           <div className="docs-section">
-            <h3><span>05</span> Errors & usage</h3>
-            <p>Errors include a machine-readable <code>error.code</code>. Successful requests return token counts, and responses include <code>x-ratelimit-limit</code>, <code>x-ratelimit-remaining</code>, and <code>x-ratelimit-reset</code> headers.</p>
+            <h3><span>06</span> Errors &amp; usage</h3>
+            <p>Errors include a machine-readable <code>error.code</code>: <code>invalid_api_key</code> (401), <code>api_key_deactivated</code> (403), <code>daily_limit_exceeded</code> (429). Successful requests return token counts, and responses include <code>x-ratelimit-limit</code>, <code>x-ratelimit-remaining</code>, and <code>x-ratelimit-reset</code> headers.</p>
           </div>
         </div>
         <div className="modal-footer"><span>One page. No maze of menus.</span><button className="button button--secondary" type="button" onClick={onClose}>Got it <Check size={15} /></button></div>
@@ -378,6 +426,77 @@ function PanelHeading({ eyebrow, title, subtitle, icon, iconTone = "green", trai
   );
 }
 
+function KeyRow({ apiKey, onActivate, onRevoke, activating, revoking }: {
+  apiKey: ApiKey;
+  onActivate: (key: ApiKey) => void;
+  onRevoke: (key: ApiKey) => void;
+  activating: boolean;
+  revoking: boolean;
+}) {
+  const status = apiKey.status;
+  const countdown = status === "active" ? deactivationCountdown(apiKey) : null;
+  return (
+    <article className={`key-row key-row--${status}`}>
+      <div className="key-row__icon">{status === "deactivated" ? <PowerOff size={16} /> : <KeyRound size={16} />}</div>
+      <div className="key-row__main">
+        <div className="key-row__name">
+          <strong>{apiKey.name}</strong>
+          {status === "revoked" ? (
+            <span className="badge badge--revoked">REVOKED</span>
+          ) : status === "deactivated" ? (
+            <span className="badge badge--deactivated">DEACTIVATED</span>
+          ) : (
+            <span className="key-row__active"><span className="status-dot status-dot--lime" /> ACTIVE</span>
+          )}
+          {countdown && <span className="badge badge--idle">{countdown.toUpperCase()}</span>}
+        </div>
+        <div className="key-row__meta">
+          <code>{apiKey.prefix}</code>
+          <span>·</span>
+          <span>Created {new Date(apiKey.createdAt).toLocaleDateString("en-NZ", { day: "numeric", month: "short" })}</span>
+          <span>·</span>
+          <span>{status === "revoked" ? "No longer valid" : relativeTime(apiKey.lastUsedAt)}</span>
+        </div>
+        {status === "deactivated" && (
+          <p className="key-row__notice">
+            <Clock3 size={11} />
+            <span>
+              Switched off {timeAgo(apiKey.deactivatedAt)} after {apiKey.inactivityDays} days without use. Requests with this key
+              return <code>api_key_deactivated</code> until you press Activate.
+            </span>
+          </p>
+        )}
+      </div>
+      <div className="key-row__actions">
+        {status === "deactivated" && (
+          <button
+            className="button button--lime key-row__activate"
+            type="button"
+            onClick={() => onActivate(apiKey)}
+            disabled={activating}
+            title={`Activate ${apiKey.name}`}
+          >
+            {activating ? <LoaderCircle size={14} className="spin" /> : <Power size={14} />}
+            Activate
+          </button>
+        )}
+        {status !== "revoked" && (
+          <button
+            className="icon-button key-row__revoke"
+            type="button"
+            onClick={() => onRevoke(apiKey)}
+            disabled={revoking}
+            aria-label={`Revoke ${apiKey.name}`}
+            title="Revoke key"
+          >
+            {revoking ? <LoaderCircle size={16} className="spin" /> : <Trash2 size={15} />}
+          </button>
+        )}
+      </div>
+    </article>
+  );
+}
+
 export default function App() {
   const { isLoading: authLoading, isAuthenticated } = useConvexAuth();
   const { signIn, signOut } = useAuthActions();
@@ -386,12 +505,14 @@ export default function App() {
   const ensureProfileMutation = useMutation(api.dashboard.ensureProfile);
   const createKeyMutation = useMutation(api.apiKeys.create);
   const revokeKeyMutation = useMutation(api.apiKeys.revoke);
+  const activateKeyMutation = useMutation(api.apiKeys.activate);
   const createCheckout = useAction(api.billing.createCheckout);
   const createPortal = useAction(api.billing.createPortal);
   const [keyName, setKeyName] = useState("Personal development");
   const [creatingKey, setCreatingKey] = useState(false);
   const [billingBusy, setBillingBusy] = useState(false);
   const [revoking, setRevoking] = useState<string | null>(null);
+  const [activating, setActivating] = useState<string | null>(null);
   const [newKey, setNewKey] = useState<NewKey | null>(null);
   const [showDocs, setShowDocs] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -426,6 +547,8 @@ export default function App() {
   const accountName = overview?.user?.name?.trim() || overview?.user?.email?.split("@")[0] || "Developer";
   const avatarLetter = accountName.charAt(0).toUpperCase();
   const hasChartData = Boolean(overview?.chart.some((day) => day.requests > 0));
+  const inactivityDays = overview?.inactivityDays ?? INACTIVITY_DEACTIVATION_DAYS;
+  const deactivatedKeys = overview?.deactivatedKeys ?? 0;
   const chartData = overview?.chart ?? Array.from({ length: 7 }, (_, index) => ({
     date: new Date(Date.now() - (6 - index) * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
     requests: 0,
@@ -531,6 +654,18 @@ export default function App() {
       notify({ text: error instanceof Error ? error.message : "Couldn't revoke that key.", kind: "error" });
     } finally {
       setRevoking(null);
+    }
+  };
+
+  const handleActivate = async (key: ApiKey) => {
+    setActivating(key.id);
+    try {
+      await activateKeyMutation({ id: key.id as never });
+      notify({ text: `${key.name} is active again. The ${key.inactivityDays}-day idle timer restarts now.`, kind: "success" });
+    } catch (error) {
+      notify({ text: error instanceof Error ? error.message : "Couldn't activate that key.", kind: "error" });
+    } finally {
+      setActivating(null);
     }
   };
 
@@ -672,9 +807,14 @@ export default function App() {
                 <PanelHeading
                   eyebrow="ACCESS MANAGEMENT"
                   title="API keys"
-                  subtitle={signedIn ? "Create, copy once, and revoke in a click." : "Sign in to create and manage keys."}
+                  subtitle={signedIn ? `Create, copy once, revoke in a click. Unused keys switch off after ${inactivityDays} days — press Activate to bring one back.` : "Sign in to create and manage keys."}
                   icon={<KeyRound size={17} />}
-                  trailing={<span className="keys-count">{signedIn ? `${overview?.activeKeys ?? 0} ACTIVE` : "PRIVATE"}</span>}
+                  trailing={
+                    <div className="keys-count-group">
+                      <span className="keys-count">{signedIn ? `${overview?.activeKeys ?? 0} ACTIVE` : "PRIVATE"}</span>
+                      {signedIn && deactivatedKeys > 0 && <span className="keys-count keys-count--idle">{deactivatedKeys} OFF</span>}
+                    </div>
+                  }
                 />
                 <form className="create-key-form" onSubmit={handleCreateKey}>
                   <label htmlFor="key-name" className="visually-hidden">Name your API key</label>
@@ -688,16 +828,19 @@ export default function App() {
                   {signedIn && keyList === undefined ? (
                     <div className="key-empty key-empty--loading"><LoaderCircle size={17} className="spin" /> Loading your keys…</div>
                   ) : signedIn && keyList && keyList.length > 0 ? keyList.map((key) => (
-                    <article className={`key-row${key.revokedAt ? " key-row--revoked" : ""}`} key={key.id}>
-                      <div className="key-row__icon"><KeyRound size={16} /></div>
-                      <div className="key-row__main"><div className="key-row__name"><strong>{key.name}</strong>{key.revokedAt ? <span className="badge badge--revoked">REVOKED</span> : <span className="key-row__active"><span className="status-dot status-dot--lime" /> ACTIVE</span>}</div><div className="key-row__meta"><code>{key.prefix}</code><span>·</span><span>Created {new Date(key.createdAt).toLocaleDateString("en-NZ", { day: "numeric", month: "short" })}</span><span>·</span><span>{key.revokedAt ? "No longer valid" : relativeTime(key.lastUsedAt)}</span></div></div>
-                      {!key.revokedAt && <button className="icon-button key-row__revoke" type="button" onClick={() => handleRevoke(key)} disabled={revoking === key.id} aria-label={`Revoke ${key.name}`} title="Revoke key">{revoking === key.id ? <LoaderCircle size={16} className="spin" /> : <Trash2 size={15} />}</button>}
-                    </article>
+                    <KeyRow
+                      key={key.id}
+                      apiKey={key}
+                      onActivate={handleActivate}
+                      onRevoke={handleRevoke}
+                      activating={activating === key.id}
+                      revoking={revoking === key.id}
+                    />
                   )) : (
                     <div className="key-empty"><div className="key-empty__icon"><LockKeyhole size={18} /></div><div><strong>{signedIn ? "No API keys yet" : "Your keys stay private"}</strong><p>{signedIn ? "Create your first key above. The secret is only shown once." : "Sign in with GitHub to create a key and unlock live usage."}</p></div>{!signedIn && <button className="text-button" type="button" onClick={handleSignIn}>Sign in <ArrowRight size={13} /></button>}</div>
                   )}
                 </div>
-                <div className="keys-panel__foot"><ShieldCheck size={13} /><span>Keys are stored as SHA-256 hashes. Revocation takes effect immediately.</span><span className="keys-panel__cap">UP TO 10 ACTIVE</span></div>
+                <div className="keys-panel__foot"><ShieldCheck size={13} /><span>Keys are stored as SHA-256 hashes. Revocation is permanent; a key idle for {inactivityDays} days is deactivated and can be switched back on here.</span><span className="keys-panel__cap">UP TO 10 KEYS</span></div>
               </section>
               <CodeSnippet onNotify={notify} />
             </div>

@@ -1,5 +1,11 @@
 import { v } from "convex/values";
 import { internalMutation, internalQuery } from "./_generated/server.js";
+import {
+  INACTIVITY_DEACTIVATION_DAYS,
+  inactivityDeadline,
+  isInactive,
+  lastActivityAt,
+} from "./lib/keys.js";
 import { ACTIVE_MODEL_ID, limitForTier, utcDateKey } from "./lib/limits.js";
 
 export const checkApiKey = internalQuery({
@@ -11,6 +17,20 @@ export const checkApiKey = internalQuery({
       .unique();
     if (!key || key.revokedAt !== undefined) return null;
 
+    const now = Date.now();
+    // Queries cannot write, so report the deadline-derived state. The next
+    // mutation (or the hourly sweep) stamps `deactivatedAt` for real.
+    if (key.deactivatedAt !== undefined || isInactive(key, now)) {
+      return {
+        status: "deactivated" as const,
+        deactivatedAt: key.deactivatedAt ?? inactivityDeadline(key),
+        lastUsedAt: key.lastUsedAt ?? null,
+        lastActivityAt: lastActivityAt(key),
+        inactivityDays: INACTIVITY_DEACTIVATION_DAYS,
+        prefix: key.prefix,
+      };
+    }
+
     const profile = await ctx.db
       .query("profiles")
       .withIndex("by_user", (q) => q.eq("userId", key.userId))
@@ -21,7 +41,13 @@ export const checkApiKey = internalQuery({
       .query("usageDaily")
       .withIndex("by_user_date", (q) => q.eq("userId", key.userId).eq("date", today))
       .unique();
-    return { tier, limit: limitForTier(tier), used: usage?.requests ?? 0 };
+    return {
+      status: "ok" as const,
+      tier,
+      limit: limitForTier(tier),
+      used: usage?.requests ?? 0,
+      deactivatesAt: inactivityDeadline(key),
+    };
   },
 });
 
@@ -35,6 +61,27 @@ export const authorizeAndCount = internalMutation({
       .withIndex("by_hash", (q) => q.eq("keyHash", args.keyHash))
       .unique();
     if (!key || key.revokedAt !== undefined) return { ok: false as const, reason: "unauthorized" as const };
+
+    // Enforce the inactivity window on the request path so a key is never
+    // usable past its deadline, even if the hourly sweep has not run yet.
+    if (key.deactivatedAt !== undefined || isInactive(key)) {
+      const deactivatedAt = key.deactivatedAt ?? inactivityDeadline(key);
+      if (key.deactivatedAt === undefined) {
+        await ctx.db.patch(key._id, {
+          deactivatedAt,
+          deactivatedReason: "inactivity",
+          lastActiveAt: lastActivityAt(key),
+        });
+      }
+      return {
+        ok: false as const,
+        reason: "key_deactivated" as const,
+        deactivatedAt,
+        lastUsedAt: key.lastUsedAt ?? null,
+        inactivityDays: INACTIVITY_DEACTIVATION_DAYS,
+        prefix: key.prefix,
+      };
+    }
 
     const profile = await ctx.db
       .query("profiles")
@@ -77,9 +124,11 @@ export const authorizeAndCount = internalMutation({
     }
 
     // Avoid writing the key document on every hot request while still keeping
-    // last-used status reasonably fresh for the dashboard.
+    // last-used status reasonably fresh for the dashboard. The same write
+    // restarts the 14-day inactivity countdown; a minute of lag is immaterial
+    // against that window.
     if (key.lastUsedAt === undefined || now - key.lastUsedAt > 60_000) {
-      await ctx.db.patch(key._id, { lastUsedAt: now });
+      await ctx.db.patch(key._id, { lastUsedAt: now, lastActiveAt: now });
     }
 
     return {

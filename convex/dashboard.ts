@@ -1,6 +1,7 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { mutation, query } from "./_generated/server.js";
-import { limitForTier, utcDateKey } from "./lib/limits.js";
+import { INACTIVITY_DEACTIVATION_DAYS, keyStatus } from "./lib/keys.js";
+import { MAX_ACTIVE_KEYS, limitForTier, utcDateKey } from "./lib/limits.js";
 
 export const ensureProfile = mutation({
   args: {},
@@ -59,10 +60,12 @@ export const get = query({
       return { date, requests: requestsByDay.get(date) ?? 0 };
     });
 
-    const activeKeys = await ctx.db
+    const keys = await ctx.db
       .query("apiKeys")
       .withIndex("by_user", (q) => q.eq("userId", userId))
       .collect();
+    const liveKeys = keys.filter((key) => key.revokedAt === undefined);
+    const statuses = liveKeys.map((key) => keyStatus(key, now));
 
     return {
       user: {
@@ -76,7 +79,10 @@ export const get = query({
       used: usageToday?.requests ?? 0,
       remaining: Math.max(0, limit - (usageToday?.requests ?? 0)),
       chart,
-      activeKeys: activeKeys.filter((key) => key.revokedAt === undefined).length,
+      activeKeys: statuses.filter((status) => status === "active").length,
+      deactivatedKeys: statuses.filter((status) => status === "deactivated").length,
+      keyLimit: MAX_ACTIVE_KEYS,
+      inactivityDays: INACTIVITY_DEACTIVATION_DAYS,
       billingCustomerReady: Boolean(profile?.stripeCustomerId),
     };
   },

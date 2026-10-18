@@ -10,6 +10,7 @@
     "convex:dev": "convex dev",
     "convex:deploy": "node scripts/provision-convex.mjs --required",
     "model:verify": "node v0idgpt/javascript/verify.mjs",
+    "keys:verify": "node scripts/verify-key-lifecycle.mjs",
     "build:release": "node scripts/provision-convex.mjs --required --build"
   },
   "dependencies": {

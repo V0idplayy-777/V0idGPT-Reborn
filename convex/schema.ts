@@ -20,11 +20,19 @@ export default defineSchema({
     prefix: v.string(),
     createdAt: v.number(),
     lastUsedAt: v.optional(v.number()),
+    // Restarts the 14-day inactivity countdown: written on use and on manual
+    // reactivation. Optional so keys created before this field keep working.
+    lastActiveAt: v.optional(v.number()),
+    deactivatedAt: v.optional(v.number()),
+    deactivatedReason: v.optional(v.literal("inactivity")),
+    reactivatedAt: v.optional(v.number()),
     revokedAt: v.optional(v.number()),
   })
     .index("by_hash", ["keyHash"])
     .index("by_user", ["userId"])
-    .index("by_user_created", ["userId", "createdAt"]),
+    .index("by_user_created", ["userId", "createdAt"])
+    // Lets the inactivity sweep read only live keys that are past the cutoff.
+    .index("by_live_activity", ["revokedAt", "deactivatedAt", "lastActiveAt"]),
   usageDaily: defineTable({
     userId: v.id("users"),
     date: v.string(),
