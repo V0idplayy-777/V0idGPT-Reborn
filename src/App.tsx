@@ -15,6 +15,7 @@ import {
   CreditCard,
   ExternalLink,
   Gauge,
+  Gift,
   KeyRound,
   LoaderCircle,
   LockKeyhole,
